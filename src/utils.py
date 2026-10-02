@@ -58,7 +58,7 @@ def split_de(df: pd.DataFrame, abundance_cols: list[str]) -> dict[str, pd.DataFr
         raw_col  = next(c for c in abundance_cols if "Abundance Ratio:" in c and "P-Value" not in c and "P-value" not in c)
         log2_col = raw_col.replace("Abundance Ratio:", "Abundance Ratio (log2):")
         df[log2_col] = np.log2(df[raw_col])
-        abundance_cols = abundance_cols + [log2_col]
+        abundance_cols.append(log2_col)
 
     all_de = df[df[pvalue_col] < 0.05].copy()
     log2   = all_de[log2_col]
