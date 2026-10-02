@@ -68,9 +68,11 @@ def split_de(df: pd.DataFrame, group: dict[str, str]) -> dict[str, pd.DataFrame]
         group["log2"] = log2_col
 
     all_de = df[df[pvalue_col] < 0.05].copy()
+
+    non_de = df[df[pvalue_col] > 0.05].copy()
     log2   = all_de[group["log2"]]
 
-    unchanged     = all_de[(log2 >= -1) & (log2 <= 1)].copy()
+    unchanged     = non_de
     upregulated   = all_de[log2 > 1].copy()
     downregulated = all_de[log2 < -1].copy()
 
