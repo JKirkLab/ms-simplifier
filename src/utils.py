@@ -1,67 +1,74 @@
 import pandas as pd
 
-def find_abun_ratio(df: pd.DataFrame):
-    """function to find abundance ratio and p-value columns"""
-
-    abundance_cols = [
-        col for col in df.columns
-        if "Abundance Ratio" in col
-    ]
-
-    return abundance_cols
-
-
-def filter_sig(df: pd.DataFrame, abundance_cols:list[str]):
-    """filters significant proteins based on adjusted p-value"""
-
-    pvalue_cols = [
-        col for col in abundance_cols
-        if "Abundance Ratio Adj. P-Value:" in col
-    ]
-
-    if len(pvalue_cols) != 1:
-        raise ValueError(f"Expected 1 p-value column, found {len(pvalue_cols)}")
-
-    pvalue_col = pvalue_cols[0]
-    
-    return df[df[pvalue_col] < 0.05]
-
-
-def compose_columns(df: pd.DataFrame):
-    """Restructures current columns for simplification."""
-
-    df["Gene"] = df["Description"].str.extract(r"GN=(\S+)")
-    df["Description"] = df["Description"].str.split(" OS=").str[0]
-
-
 FIXED_KEEP_COLS = ["Accession", "Description", "Gene", "Modifications"]
 
-def simplify_columns(df: pd.DataFrame, abundance_cols: list[str]) -> pd.DataFrame:
-    """Return a trimmed DataFrame with only key identifier + abundance ratio columns."""
+
+def group_abundance_cols(df: pd.DataFrame) -> dict[str, dict[str, str]]:
+    """Find all comparison groups and pair their ratio, p-value, and adj. p-value columns.
+
+    Returns a dict mapping comparison label -> {adj_pvalue, pvalue, ratio} column names.
+    Raises ValueError if expected paired columns are missing for any group.
+    """
+    adj_pvalue_cols = [c for c in df.columns if "Abundance Ratio Adj. P-Value:" in c]
+
+    if not adj_pvalue_cols:
+        raise ValueError("No 'Abundance Ratio Adj. P-Value:' columns found")
+
+    groups = {}
+    for adj_col in adj_pvalue_cols:
+        suffix     = adj_col.split("Abundance Ratio Adj. P-Value:")[1]
+        pvalue_col = f"Abundance Ratio P-Value:{suffix}"
+        ratio_col  = f"Abundance Ratio:{suffix}"
+        log2_col   = f"Abundance Ratio (log2):{suffix}"
+
+        missing = [c for c in [pvalue_col, ratio_col] if c not in df.columns]
+        if missing:
+            raise ValueError(f"Missing paired columns for '{suffix.strip()}': {missing}")
+
+        group = {"adj_pvalue": adj_col, "pvalue": pvalue_col, "ratio": ratio_col}
+        if log2_col in df.columns:
+            group["log2"] = log2_col
+
+        groups[suffix.strip()] = group
+
+    return groups
+
+
+def compose_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Extract Gene symbol and trim Description in place. Returns df for chaining."""
+    df["Gene"] = df["Description"].str.extract(r"GN=(\S+)")
+    df["Description"] = df["Description"].str.split(" OS=").str[0]
+    return df
+
+
+def simplify_columns(df: pd.DataFrame, group: dict[str, str]) -> pd.DataFrame:
+    """Return a trimmed DataFrame with fixed identifier columns + group-specific columns."""
     present_fixed = [c for c in FIXED_KEEP_COLS if c in df.columns]
-    keep = present_fixed + abundance_cols
+    group_cols    = [c for c in group.values() if c in df.columns]
+    direction     = ["Direction"] if "Direction" in df.columns else []
+    keep = present_fixed + group_cols + direction
     return df[keep]
 
 
-def split_de(df: pd.DataFrame, abundance_cols: list[str]) -> dict[str, pd.DataFrame]:
-    """Split DataFrame into all-DE, upregulated, and downregulated sheets.
+def split_de(df: pd.DataFrame, group: dict[str, str]) -> dict[str, pd.DataFrame]:
+    """Split DataFrame into All DE, Unchanged, Upregulated, Downregulated for one group.
 
-    Upregulated:   log2(abundance ratio) > 1
-    Downregulated: log2(abundance ratio) < -1
+    Generates a log2 column from the raw ratio if one is not already present.
+    Upregulated:   log2(ratio) > 1
+    Downregulated: log2(ratio) < -1
     """
     import numpy as np
 
-    pvalue_col = next(c for c in abundance_cols if "Abundance Ratio Adj. P-Value:" in c)
+    pvalue_col = group["adj_pvalue"]
 
-    log2_col = next((c for c in abundance_cols if "Abundance Ratio (log2):" in c), None)
-    if log2_col is None:
-        raw_col  = next(c for c in abundance_cols if "Abundance Ratio:" in c and "P-Value" not in c and "P-value" not in c)
+    if "log2" not in group:
+        raw_col  = group["ratio"]
         log2_col = raw_col.replace("Abundance Ratio:", "Abundance Ratio (log2):")
         df[log2_col] = np.log2(df[raw_col])
-        abundance_cols.append(log2_col)
+        group["log2"] = log2_col
 
     all_de = df[df[pvalue_col] < 0.05].copy()
-    log2   = all_de[log2_col]
+    log2   = all_de[group["log2"]]
 
     unchanged     = all_de[(log2 >= -1) & (log2 <= 1)].copy()
     upregulated   = all_de[log2 > 1].copy()
@@ -89,10 +96,3 @@ def write_excel(sheets: dict[str, pd.DataFrame], path) -> None:
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         for sheet_name, df in sheets.items():
             df.to_excel(writer, sheet_name=sheet_name, index=False)
-    
-
-
-
-
-
-
